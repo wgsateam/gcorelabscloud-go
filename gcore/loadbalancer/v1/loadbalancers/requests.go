@@ -11,11 +11,44 @@ import (
 	"github.com/G-Core/gcorelabscloud-go/pagination"
 )
 
-func List(c *gcorecloud.ServiceClient) pagination.Pager {
+func List(c *gcorecloud.ServiceClient, opts ListOptsBuilder) pagination.Pager {
 	url := listURL(c)
+	if opts != nil {
+		query, err := opts.ToLoadBalancerListQuery()
+		if err != nil {
+			return pagination.Pager{Err: err}
+		}
+		url += query
+	}
 	return pagination.NewPager(c, url, func(r pagination.PageResult) pagination.Page {
 		return LoadBalancerPage{pagination.LinkedPageBase{PageResult: r}}
 	})
+}
+
+// ListOpts allows the filtering and sorting List API response.
+type ListOpts struct {
+	ShowStats        bool              `q:"show_stats" validate:"omitempty"`
+	AssignedFloating bool              `q:"assigned_floating" validate:"omitempty"`
+	MetadataK        string            `q:"metadata_k" validate:"omitempty"`
+	MetadataKV       map[string]string `q:"metadata_kv" validate:"omitempty"`
+}
+
+// ToLoadBalancerListQuery formats a ListOpts into a query string.
+func (opts ListOpts) ToLoadBalancerListQuery() (string, error) {
+	if err := gcorecloud.ValidateStruct(opts); err != nil {
+		return "", err
+	}
+
+	q, err := gcorecloud.BuildQueryString(opts)
+	if err != nil {
+		return "", err
+	}
+	return q.String(), err
+}
+
+// ListOptsBuilder allows extensions to add additional parameters to the List request.
+type ListOptsBuilder interface {
+	ToLoadBalancerListQuery() (string, error)
 }
 
 // Get retrieves a specific loadbalancer based on its unique ID.
@@ -86,12 +119,13 @@ type CreateListenerOpts struct {
 
 // CreateOpts represents options used to create a loadbalancer.
 type CreateOpts struct {
-	Name         string               `json:"name" required:"true" validate:"required,name"`
-	Listeners    []CreateListenerOpts `json:"listeners,omitempty" validate:"omitempty,dive"`
-	VipNetworkID string               `json:"vip_network_id,omitempty"`
-	VipSubnetID  string               `json:"vip_subnet_id,omitempty"`
-	Flavor       *string              `json:"flavor,omitempty"`
-	Tags         []string             `json:"tag,omitempty"`
+	Name         string                 `json:"name" required:"true" validate:"required,name"`
+	Listeners    []CreateListenerOpts   `json:"listeners,omitempty" validate:"omitempty,dive"`
+	VipNetworkID string                 `json:"vip_network_id,omitempty"`
+	VipSubnetID  string                 `json:"vip_subnet_id,omitempty"`
+	Flavor       *string                `json:"flavor,omitempty"`
+	Tags         []string               `json:"tag,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ToLoadBalancerCreateMap builds a request body from CreateOpts.
@@ -152,8 +186,8 @@ func Delete(c *gcorecloud.ServiceClient, loadbalancerID string) (r tasks.Result)
 }
 
 // ListAll returns all LBs
-func ListAll(c *gcorecloud.ServiceClient) ([]LoadBalancer, error) {
-	page, err := List(c).AllPages()
+func ListAll(c *gcorecloud.ServiceClient, opts ListOptsBuilder) ([]LoadBalancer, error) {
+	page, err := List(c, opts).AllPages()
 	if err != nil {
 		return nil, err
 	}
@@ -171,5 +205,56 @@ func CreateCustomSecurityGroup(c *gcorecloud.ServiceClient, loadbalancerID strin
 // ListCustomSecurityGroup accepts a unique ID and returns a custom security group for the load balancer's ingress port.
 func ListCustomSecurityGroup(c *gcorecloud.ServiceClient, loadbalancerID string) (r CustomSecurityGroupGetResult) {
 	_, r.Err = c.Get(createCustomSecurityGroupURL(c, loadbalancerID), &r.Body, nil)
+	return
+}
+
+func MetadataList(client *gcorecloud.ServiceClient, id string) pagination.Pager {
+	url := metadataURL(client, id)
+	return pagination.NewPager(client, url, func(r pagination.PageResult) pagination.Page {
+		return MetadataPage{pagination.LinkedPageBase{PageResult: r}}
+	})
+}
+
+func MetadataListAll(client *gcorecloud.ServiceClient, id string) ([]Metadata, error) {
+	pages, err := MetadataList(client, id).AllPages()
+	if err != nil {
+		return nil, err
+	}
+	all, err := ExtractMetadata(pages)
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// MetadataCreateOrUpdate creates or update a metadata for an security group.
+func MetadataCreateOrUpdate(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Post(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataReplace replace a metadata for an security group.
+func MetadataReplace(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Put(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataDelete deletes defined metadata key for a security group.
+func MetadataDelete(client *gcorecloud.ServiceClient, id string, key string) (r MetadataActionResult) {
+	_, r.Err = client.Delete(metadataItemURL(client, id, key), &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataGet gets defined metadata key for a security group.
+func MetadataGet(client *gcorecloud.ServiceClient, id string, key string) (r MetadataResult) {
+	url := metadataItemURL(client, id, key)
+
+	_, r.Err = client.Get(url, &r.Body, nil) // nolint
 	return
 }
