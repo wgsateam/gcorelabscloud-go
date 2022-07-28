@@ -1,13 +1,46 @@
 package networks
 
 import (
+	"net/http"
+
 	gcorecloud "github.com/G-Core/gcorelabscloud-go"
 	"github.com/G-Core/gcorelabscloud-go/gcore/task/v1/tasks"
 	"github.com/G-Core/gcorelabscloud-go/pagination"
 )
 
-func List(c *gcorecloud.ServiceClient) pagination.Pager {
+// ListOpts allows the filtering and sorting of paginated collections through the API.
+type ListOpts struct {
+	MetadataK  string            `q:"metadata_k" validate:"omitempty"`
+	MetadataKV map[string]string `q:"metadata_kv" validate:"omitempty"`
+}
+
+// ToNetworkListQuery formats a ListOpts into a query string.
+func (opts ListOpts) ToNetworkListQuery() (string, error) {
+	if err := gcorecloud.ValidateStruct(opts); err != nil {
+		return "", err
+	}
+	q, err := gcorecloud.BuildQueryString(opts)
+	if err != nil {
+		return "", err
+	}
+	return q.String(), err
+}
+
+// ListOptsBuilder allows extensions to add additional parameters to the List request.
+type ListOptsBuilder interface {
+	ToNetworkListQuery() (string, error)
+}
+
+func List(c *gcorecloud.ServiceClient, opts ListOptsBuilder) pagination.Pager {
 	url := listURL(c)
+
+	if opts != nil {
+		query, err := opts.ToNetworkListQuery()
+		if err != nil {
+			return pagination.Pager{Err: err}
+		}
+		url += query
+	}
 	return pagination.NewPager(c, url, func(r pagination.PageResult) pagination.Page {
 		return NetworkPage{pagination.LinkedPageBase{PageResult: r}}
 	})
@@ -28,10 +61,11 @@ type CreateOptsBuilder interface {
 
 // CreateOpts represents options used to create a network.
 type CreateOpts struct {
-	Name         string `json:"name" required:"true" validate:"required"`
-	Mtu          int    `json:"mtu,omitempty" validate:"omitempty,lte=1500"`
-	CreateRouter bool   `json:"create_router"`
-	Type         string `json:"type,omitempty" validate:"omitempty"`
+	Name         string                 `json:"name" required:"true" validate:"required"`
+	Mtu          int                    `json:"mtu,omitempty" validate:"omitempty,lte=1500"`
+	CreateRouter bool                   `json:"create_router"`
+	Type         string                 `json:"type,omitempty" validate:"omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ToNetworkCreateMap builds a request body from CreateOpts.
@@ -102,8 +136,8 @@ func Delete(c *gcorecloud.ServiceClient, networkID string) (r tasks.Result) {
 }
 
 // ListAll is a convenience function that returns all networks.
-func ListAll(client *gcorecloud.ServiceClient) ([]Network, error) {
-	pages, err := List(client).AllPages()
+func ListAll(client *gcorecloud.ServiceClient, opts ListOptsBuilder) ([]Network, error) {
+	pages, err := List(client, opts).AllPages()
 	if err != nil {
 		return nil, err
 	}
@@ -129,17 +163,12 @@ func IDFromName(client *gcorecloud.ServiceClient, name string) (string, error) {
 	count := 0
 	id := ""
 
-	pages, err := List(client).AllPages()
+	pages, err := ListAll(client, nil)
 	if err != nil {
 		return "", err
 	}
 
-	all, err := ExtractNetworks(pages)
-	if err != nil {
-		return "", err
-	}
-
-	for _, s := range all {
+	for _, s := range pages {
 		if s.Name == name {
 			count++
 			id = s.ID
@@ -154,4 +183,55 @@ func IDFromName(client *gcorecloud.ServiceClient, name string) (string, error) {
 	default:
 		return "", gcorecloud.ErrMultipleResourcesFound{Name: name, Count: count, ResourceType: "networks"}
 	}
+}
+
+func MetadataList(client *gcorecloud.ServiceClient, id string) pagination.Pager {
+	url := metadataURL(client, id)
+	return pagination.NewPager(client, url, func(r pagination.PageResult) pagination.Page {
+		return MetadataPage{pagination.LinkedPageBase{PageResult: r}}
+	})
+}
+
+func MetadataListAll(client *gcorecloud.ServiceClient, id string) ([]Metadata, error) {
+	pages, err := MetadataList(client, id).AllPages()
+	if err != nil {
+		return nil, err
+	}
+	all, err := ExtractMetadata(pages)
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// MetadataCreateOrUpdate creates or update a metadata for an security group.
+func MetadataCreateOrUpdate(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Post(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataReplace replace a metadata for an security group.
+func MetadataReplace(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Put(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataDelete deletes defined metadata key for a security group.
+func MetadataDelete(client *gcorecloud.ServiceClient, id string, key string) (r MetadataActionResult) {
+	_, r.Err = client.Delete(metadataItemURL(client, id, key), &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataGet gets defined metadata key for a security group.
+func MetadataGet(client *gcorecloud.ServiceClient, id string, key string) (r MetadataResult) {
+	url := metadataItemURL(client, id, key)
+
+	_, r.Err = client.Get(url, &r.Body, nil) // nolint
+	return
 }
