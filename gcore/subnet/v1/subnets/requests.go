@@ -2,6 +2,7 @@ package subnets
 
 import (
 	"net"
+	"net/http"
 
 	gcorecloud "github.com/G-Core/gcorelabscloud-go"
 	"github.com/G-Core/gcorelabscloud-go/gcore/task/v1/tasks"
@@ -51,19 +52,22 @@ type HostRoute struct {
 // CreateOpts represents options used to create a subnet.
 // GatewayIP must be null in json because an empty key creates a gateway in the neutron API.
 type CreateOpts struct {
-	Name                   string          `json:"name" required:"true"`
-	EnableDHCP             bool            `json:"enable_dhcp,omitempty"`
-	CIDR                   gcorecloud.CIDR `json:"cidr" required:"true"`
-	NetworkID              string          `json:"network_id" required:"true"`
-	ConnectToNetworkRouter bool            `json:"connect_to_network_router"`
-	DNSNameservers         []net.IP        `json:"dns_nameservers,omitempty"`
-	HostRoutes             []HostRoute     `json:"host_routes,omitempty"`
-	GatewayIP              *net.IP         `json:"gateway_ip"`
+	Name                   string                 `json:"name" required:"true"`
+	EnableDHCP             bool                   `json:"enable_dhcp,omitempty"`
+	CIDR                   gcorecloud.CIDR        `json:"cidr" required:"true"`
+	NetworkID              string                 `json:"network_id" required:"true"`
+	ConnectToNetworkRouter bool                   `json:"connect_to_network_router"`
+	DNSNameservers         []net.IP               `json:"dns_nameservers,omitempty"`
+	HostRoutes             []HostRoute            `json:"host_routes,omitempty"`
+	GatewayIP              *net.IP                `json:"gateway_ip"`
+	Metadata               map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ListOpts allows the filtering and sorting List API response.
 type ListOpts struct {
-	NetworkID string `q:"network_id"`
+	NetworkID  string            `q:"network_id"`
+	MetadataK  string            `q:"metadata_k" validate:"omitempty"`
+	MetadataKV map[string]string `q:"metadata_kv" validate:"omitempty"`
 }
 
 // ToSubnetCreateMap builds a request body from CreateOpts.
@@ -184,4 +188,55 @@ func IDFromName(client *gcorecloud.ServiceClient, name string) (string, error) {
 	default:
 		return "", gcorecloud.ErrMultipleResourcesFound{Name: name, Count: count, ResourceType: "subnets"}
 	}
+}
+
+func MetadataList(client *gcorecloud.ServiceClient, id string) pagination.Pager {
+	url := metadataURL(client, id)
+	return pagination.NewPager(client, url, func(r pagination.PageResult) pagination.Page {
+		return MetadataPage{pagination.LinkedPageBase{PageResult: r}}
+	})
+}
+
+func MetadataListAll(client *gcorecloud.ServiceClient, id string) ([]Metadata, error) {
+	pages, err := MetadataList(client, id).AllPages()
+	if err != nil {
+		return nil, err
+	}
+	all, err := ExtractMetadata(pages)
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// MetadataCreateOrUpdate creates or update a metadata for an security group.
+func MetadataCreateOrUpdate(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Post(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataReplace replace a metadata for an security group.
+func MetadataReplace(client *gcorecloud.ServiceClient, id string, opts map[string]interface{}) (r MetadataActionResult) {
+	_, r.Err = client.Put(metadataURL(client, id), opts, nil, &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataDelete deletes defined metadata key for a security group.
+func MetadataDelete(client *gcorecloud.ServiceClient, id string, key string) (r MetadataActionResult) {
+	_, r.Err = client.Delete(metadataItemURL(client, id, key), &gcorecloud.RequestOpts{ // nolint
+		OkCodes: []int{http.StatusNoContent, http.StatusOK},
+	})
+	return
+}
+
+// MetadataGet gets defined metadata key for a security group.
+func MetadataGet(client *gcorecloud.ServiceClient, id string, key string) (r MetadataResult) {
+	url := metadataItemURL(client, id, key)
+
+	_, r.Err = client.Get(url, &r.Body, nil) // nolint
+	return
 }
