@@ -120,7 +120,7 @@ func (opts InterfaceOpts) Validate() error {
 
 type InterfaceInstanceCreateOpts struct {
 	InterfaceOpts
-	SecurityGroups []gcorecloud.ItemID `json:"security_groups"`
+	SecurityGroups []gcorecloud.ItemID `json:"security_groups,omitempty"`
 }
 
 // ToInterfaceActionMap builds a request body from InterfaceOpts.
